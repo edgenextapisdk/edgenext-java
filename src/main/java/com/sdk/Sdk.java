@@ -3,6 +3,8 @@ package com.sdk;
 import com.alibaba.fastjson.JSON;
 import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONObject;
+import com.sdk.http.SignRequest;
+import com.sdk.http.Signer;
 import okhttp3.*;
 import org.apache.commons.codec.binary.Base64;
 import org.slf4j.Logger;
@@ -11,11 +13,16 @@ import org.slf4j.LoggerFactory;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.io.IOException;
+import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.stream.Collectors;
+
+import static com.sdk.http.Signer.AUTHORIZATION;
+import static com.sdk.http.Signer.X_SDK_DATE;
 
 public class Sdk {
     private static Logger logger = LoggerFactory.getLogger(Sdk.class);
@@ -46,7 +53,7 @@ public class Sdk {
         this.appId = appId;
         this.appSecret = appSecret;
         this.userId = userId;
-        this.clientUserAgent = "Sdk 1.0.3; java/"
+        this.clientUserAgent = "Sdk 2.0.0; java/"
                 + System.getProperty("java.version")
                 + "; "
                 + System.getProperty("os.name")
@@ -54,31 +61,20 @@ public class Sdk {
                 + System.getProperty("os.version");
     }
 
-    private String sign(Map<String, Object> data, String dataFrom) {
-        data.remove("_files");
-        String encodedPayload = base64UrlEncode(JSON.toJSONString(data).getBytes());
-
-        byte[] hashedSign = hashSignature(encodedPayload, this.appSecret);
-        if (hashedSign == null) {
-            return "";
-        }
-        return base64UrlEncode(hashedSign);
-    }
-
     public Map<String, Object> typeConvertAndOrdered(Map<String, Object> query) {
         Map<String, Object> orderQuery = new TreeMap<>();
         query.forEach((k, v) -> {
             if (v instanceof Boolean[]) {
-                Boolean[] vv = (Boolean[])v;
+                Boolean[] vv = (Boolean[]) v;
                 String[] strings = new String[vv.length];
-                for(int i = 0; i < vv.length; i++) {
+                for (int i = 0; i < vv.length; i++) {
                     strings[i] = vv[i] ? "1" : "0";
                 }
                 orderQuery.put(k, strings);
             } else if (v instanceof boolean[]) {
-                boolean[] vv = (boolean[])v;
+                boolean[] vv = (boolean[]) v;
                 String[] strings = new String[vv.length];
-                for(int i = 0; i < vv.length; i++) {
+                for (int i = 0; i < vv.length; i++) {
                     strings[i] = vv[i] ? "1" : "0";
                 }
                 orderQuery.put(k, strings);
@@ -144,35 +140,48 @@ public class Sdk {
         System.out.println(JSON.toJSONString(this.typeConvertAndOrdered(query), true));
     }
 
-    private List<Map<String, Object>> _payload(Map<String, Object> query, Map<String, Object> postData, Map<String, String> headers, String dataFrom) {
-        if (dataFrom.equals("get")) {
-            query.put("user_id", this.userId);
-            query.put("client_ip", "");                //当项目内代理转发调用时，此参数用作将外部的IP传递给内部的系统，这里默认空
-            query.put("client_userAgent", this.clientUserAgent);
-            query.put("algorithm", "HMAC-SHA256");
-            query.put("issued_at", String.valueOf(System.currentTimeMillis() / 1000));
-        } else {
-            postData.put("user_id", this.userId);
-            postData.put("client_ip", "");                //当项目内代理转发调用时，此参数用作将外部的IP传递给内部的系统，这里默认空
-            postData.put("client_userAgent", this.clientUserAgent);
-            postData.put("algorithm", "HMAC-SHA256");
-            postData.put("issued_at", String.valueOf(System.currentTimeMillis() / 1000));
-        }
-
-        // 数字类型转字符串。转换完成后，value只存在 String[], Map, String 这三种类型
-        Map<String, Object> orderPostData = new TreeMap<>(postData);
-        Map<String, Object> orderSignData = orderPostData;
-        if (dataFrom.equals("get")) {
-            orderSignData = typeConvertAndOrdered(query);
-        }
-        String signStr = this.sign(orderSignData, dataFrom);
-        headers.put("X-Auth-Sign", signStr);
+    private SignRequest _payload(
+            Map<String, Object> query,
+            Map<String, Object> postData,
+            Map<String, String> headers,String api,String httpMethod) throws UnsupportedEncodingException {
         headers.put("X-Auth-App-Id", this.appId);
-        headers.put("X-Auth-Sdk-Version", "1.0.3");
+        headers.put("X-Auth-Sdk-Version", "2.0.0");
         headers.put("Content-Type", "application/json; charset=utf-8");
         headers.put("User-Agent", this.clientUserAgent);
-        TreeMap<String, Object> orderHeaders = new TreeMap<>(headers);
-        return Arrays.asList(orderSignData, orderPostData, orderHeaders);
+        headers.put("user_id", this.userId);
+        headers.put("client_ip", "");                //当项目内代理转发调用时，此参数用作将外部的IP传递给内部的系统，这里默认空
+        headers.put("client_userAgent", this.clientUserAgent);
+        headers.put("algorithm", "HMAC-SHA256");
+        headers.put("issued_at", String.valueOf(System.currentTimeMillis() / 1000));
+        // 签名时间
+        SimpleDateFormat sdf = new SimpleDateFormat("yyyyMMdd'T'HHmmss'Z'", Locale.ENGLISH);
+        sdf.setTimeZone(TimeZone.getTimeZone("UTC"));
+        headers.put(X_SDK_DATE, sdf.format(new Date()));
+        // 开始签名
+        SignRequest signReq = new SignRequest();
+        if (api.indexOf('/') == 0) api = api.substring(2);
+        String uri = this.urlEncodeForMap(query);
+        String url = this.apiUrlPre + "/" + api + (uri == "" ? "" : ("?" + uri));
+        signReq.setUrl(url);
+        signReq.setBody("");
+        // 如果存在postdata 且不为空
+        if (postData != null && !postData.isEmpty()) {
+            signReq.setBody(JSON.toJSONString(postData));
+        }
+        signReq.setKey(this.appId);
+        signReq.setSecret(this.appSecret);
+        signReq.setMethod(httpMethod);
+        String authSign = this.sign(signReq);
+        headers.put(AUTHORIZATION, authSign);
+        for (Map.Entry<String, String> entry : headers.entrySet()) {
+            signReq.addHeader(entry.getKey(), entry.getValue());
+        }
+        return signReq;
+    }
+
+    private String sign(SignRequest signReq) throws UnsupportedEncodingException {
+        Signer signer = new Signer("SDK-HMAC-SHA256");
+        return signer.sign(signReq);
     }
 
     private String base64UrlEncode(byte[] bs) {
@@ -217,51 +226,46 @@ public class Sdk {
     }
 
     private JSONObject _request(String api, String method, Map<String, Object> query, Map<String, Object> postData, Map<String, String> headers) {
-        method = method.toUpperCase();
-        List<Map<String, Object>> payload = this._payload(query, postData, headers, method.toLowerCase());
-        Map<String, Object> orderQuery = payload.get(0);
-        Map<String, Object> orderPostData = payload.get(1);
-        Map<String, Object> orderHeaders = payload.get(2);
-        if (logger.isDebugEnabled()) {
-            logger.debug("query: {}", JSON.toJSONString(orderQuery));
-            logger.debug("post: {}", JSON.toJSONString(orderPostData));
-            logger.debug("headers: {}", JSON.toJSONString(orderHeaders));
-        }
-
-        if (api.indexOf('/') == 0) api = api.substring(2);
-        String uri = this.urlEncodeForMap(orderQuery);
-        String url = this.apiUrlPre + "/" + api + (uri == "" ? "" : ("?" + uri));
-        if (logger.isDebugEnabled()) {
-            logger.debug("url: " + url);
-            logger.debug("method: " + method);
-        }
-
-        Request.Builder builder = new Request.Builder();
-        builder.url(url);
-        for (Map.Entry<String, String> entry : headers.entrySet()) {
-            builder.addHeader(entry.getKey(), entry.getValue());
-        }
-        Request request;
-        if (method.equals("GET")) {
-            request = builder.get().build();
-        } else if (method.equals("HEAD")) {
-            request = builder.head().build();
-        } else {
-            RequestBody requestBody = RequestBody.create(mediaType, JSON.toJSONString(orderPostData));
-            if (method.equals("DELETE")) {
-                request = builder.delete(requestBody).build();
-            } else if (method.equals("PATCH")) {
-                request = builder.patch(requestBody).build();
-            } else if (method.equals("POST")) {
-                request = builder.post(requestBody).build();
-            } else if (method.equals("PUT")) {
-                request = builder.put(requestBody).build();
-            } else {
-                request = builder.get().build();
-            }
-        }
-
         try {
+            method = method.toUpperCase();
+            SignRequest payload = this._payload(
+                    query,
+                    postData,
+                    headers,
+                    api,
+                    method.toLowerCase()
+            );
+            Request.Builder builder = new Request.Builder();
+            Request request;
+            builder.url(payload.getUrl());
+            // 循环payload的header put到builder
+            for (Map.Entry<String, String> entry : payload.getHeaders().entrySet()) {
+                builder.addHeader(entry.getKey(), entry.getValue());
+            }
+            if (method.equals("GET")) {
+                request = builder.get().build();
+            } else if (method.equals("HEAD")) {
+                request = builder.head().build();
+            } else {
+                RequestBody requestBody = RequestBody.create(mediaType, payload.getBody());
+                switch (method) {
+                    case "DELETE":
+                        request = builder.delete(requestBody).build();
+                        break;
+                    case "PATCH":
+                        request = builder.patch(requestBody).build();
+                        break;
+                    case "POST":
+                        request = builder.post(requestBody).build();
+                        break;
+                    case "PUT":
+                        request = builder.put(requestBody).build();
+                        break;
+                    default:
+                        request = builder.get().build();
+                        break;
+                }
+            }
             ResponseBody body = okHttpClient.newCall(request).execute().body();
             String rawBody = body.string();
             if (logger.isDebugEnabled()) {
