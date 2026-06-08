@@ -96,9 +96,31 @@ Sdk sdkObj = new Sdk(apiUrlPre, appId, appSecret, "", okHttpClient);
 
 ### Return Values
 
-- All methods return a `JSONObject`
-- Exceptions are thrown directly if an error occurs during execution
+- Low-level methods return a `JSONObject`
+- Generated wrapper methods return the apidoc response body (`status` and `data`) as a `JSONObject`
+- Transport and business errors are thrown as exceptions
 - Use the `debug()` method for debugging if needed
+
+### Generated API Wrapper
+
+The SDK includes generated EdgeNext V5 API wrappers on top of the low-level request methods. Business errors are raised as `ApiException`.
+
+```java
+import com.alibaba.fastjson.JSONObject;
+import com.sdk.generated.EdgeNextClient;
+import com.sdk.generated.requests.AddDomainsRequest;
+import com.sdk.generated.requests.ListDomainsRequest;
+
+EdgeNextClient client = new EdgeNextClient(sdkObj).setLanguage("en");
+
+JSONObject listResult = client.listDomains(new ListDomainsRequest()
+    .setPage(1)
+    .setPageSize(20));
+
+JSONObject addResult = client.addDomains(new AddDomainsRequest()
+    .setDomain("www.example.com")
+    .setGroupId(1));
+```
 
 ### Important Notes
 

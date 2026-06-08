@@ -61,6 +61,10 @@ public class Sdk {
                 + System.getProperty("os.version");
     }
 
+    public String getApiUrlPre() {
+        return this.apiUrlPre;
+    }
+
     public Map<String, Object> typeConvertAndOrdered(Map<String, Object> query) {
         Map<String, Object> orderQuery = new TreeMap<>();
         query.forEach((k, v) -> {
